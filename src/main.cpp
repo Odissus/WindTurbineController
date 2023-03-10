@@ -42,6 +42,11 @@ bool SD_successful = false;
 float temp_voltage = 0;
 String data_to_save;
 
+float get_voltage(uint8_t pin){
+  uint16_t value = analogRead(pin);
+  return 0.000796 * (float) value + 0.13;
+}
+
 float get_voltage_reading(){
   return 1;
 }
@@ -68,10 +73,10 @@ float get_temperature_reading(){
   float logR2, R2, Temperature, Therm_V;
   const float c1 = 0.001129148, c2 = 0.000234125, c3 = 0.0000000876741;
   for (int i = 0; i < 10; i++){ 
-    this_temperature += (float) analogRead(temperature_measurement_pin) / 10.0;
+    this_temperature += get_voltage(temperature_measurement_pin) / 10.0;
   }
-  Therm_V = this_temperature * V_Ref * temperature_correction_factor/ (float) ADC_steps;
-  R2 = R1 * (Therm_V/(Digital_Voltage_Reference-Therm_V));
+  Therm_V = this_temperature;
+  R2 = R1 * (Therm_V/(rail_voltage-Therm_V));
   logR2 = log(R2);
   Temperature = (1 / (c1 + c2*logR2 + c3*logR2*logR2*logR2));
   Temperature -= Celsius_Offset;
@@ -79,7 +84,7 @@ float get_temperature_reading(){
 }
 
 void update_rail_voltage_reading(){
-  rail_voltage = 2 * (float) analogRead(rail_voltage_measurement_pin) / (float) ADC_steps;
+  rail_voltage = 2 * get_voltage(rail_voltage_measurement_pin);
 }
 
 void IRAM_ATTR hole_detected_interrupt()
@@ -147,13 +152,14 @@ void loop(){
   voltage = get_voltage_reading();
   current = get_current_reading();
   temperature = get_temperature_reading();
-  Serial.print("I: ");
-  Serial.print(current);
-  Serial.print(" A; T: ");
-  Serial.print(temperature);
-  Serial.print(" C; V: ");
-  Serial.print(rail_voltage);
-  Serial.println(" V");
+  // Serial.print("I: ");
+  // Serial.print(current);
+  // Serial.print(" A; T: ");
+  // Serial.print(temperature);
+  // Serial.print(" C; V: ");
+  // Serial.print(rail_voltage);
+  // Serial.println(" V");
+  Serial.println(rail_voltage);
   time_now = millis();
   // send_packet();  
   if (SD_successful){
