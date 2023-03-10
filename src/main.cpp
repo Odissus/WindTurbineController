@@ -56,12 +56,14 @@ float get_current_reading(){
   //temp_voltage = (float) analogRead(current_measurement_pin) / 1240.9;
   //current = -9.9 * temp_voltage + 31.581;
   float this_current = 0;
+  float correction_1 = 1.24, correction_2 = 0.33;
   for (int i = 0; i < 10; i++){ 
-    this_current += (float) analogRead(current_measurement_pin) / 10.0;
+    this_current += get_voltage(current_measurement_pin) / 10.0;
   }
-  current = -0.005914 * this_current + 22.5623;
-  current = 0.02506 * current * current + 0.69493 * current;
-  if ((current>-0.2) and (current<0)){
+  float zero_current_point =  (1.0 + (220.0/1000.0)) * (rail_voltage / 2);
+  current = ((20 - 0) / (0 - zero_current_point)) * this_current + 20;
+  current = correction_1 * current + correction_2;
+  if ((current>-0.7) and (current<0)){
     current = 0;
   }
   return current;
@@ -152,9 +154,9 @@ void loop(){
   voltage = get_voltage_reading();
   current = get_current_reading();
   temperature = get_temperature_reading();
-  // Serial.print("I: ");
-  // Serial.print(current);
-  Serial.print("T: ");
+  Serial.print("I: ");
+  Serial.print(current);
+  Serial.print(" A; T: ");
   Serial.print(temperature);
   Serial.print(" C; V: ");
   Serial.print(rail_voltage);
