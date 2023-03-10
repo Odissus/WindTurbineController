@@ -44,7 +44,7 @@ String data_to_save;
 
 float get_voltage(uint8_t pin){
   uint16_t value = analogRead(pin);
-  return 0.000796 * (float) value + 0.13;
+  return 0.0007963 * (float) value + 0.13;
 }
 
 float get_voltage_reading(){
@@ -154,12 +154,12 @@ void loop(){
   temperature = get_temperature_reading();
   // Serial.print("I: ");
   // Serial.print(current);
-  // Serial.print(" A; T: ");
-  // Serial.print(temperature);
-  // Serial.print(" C; V: ");
-  // Serial.print(rail_voltage);
-  // Serial.println(" V");
-  Serial.println(rail_voltage);
+  Serial.print("T: ");
+  Serial.print(temperature);
+  Serial.print(" C; V: ");
+  Serial.print(rail_voltage);
+  Serial.println(" V");
+  // Serial.println(rail_voltage);
   time_now = millis();
   // send_packet();  
   if (SD_successful){
