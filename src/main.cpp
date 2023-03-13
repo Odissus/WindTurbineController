@@ -6,6 +6,9 @@
 #define current_measurement_pin 34
 #define temperature_measurement_pin 35
 #define rail_voltage_measurement_pin 33
+#define hall_effect_sensor_pin 25
+#define cut_off_relay_pin 14
+#define fan_pin 27
 #define current_correction_factor 1.0
 #define ADC_steps 4095
 #define Digital_Voltage_Reference 3.3
@@ -20,6 +23,9 @@
 #define voltage_tap_pin 35
 #define amplifier_gain 3.84
 #define resistance_ohm 100
+#define number_of_motor_pole_pairs 7
+#define max_adc_read 3.1
+#define min_adc_read 0.
 
 /* WiFi network name and password */
 const char * ssid = "TurbineMonitor";
@@ -27,6 +33,7 @@ const char * pwd = "0000000000";
 const int udpPort = 44444;
 WiFiUDP udp;
 
+int hall_effect_event_counts = 0;
 float rail_voltage = 0;
 float voltage = 0;
 float current = 0;
@@ -40,6 +47,8 @@ int holes = 0;
 float oscilloscope_reading = 0;
 bool SD_successful = false;
 float temp_voltage = 0;
+unsigned long time_since_last_rpm_reading = 0;
+bool fan_relay_on = false;
 String data_to_save;
 
 float get_voltage(uint8_t pin){
@@ -89,9 +98,30 @@ void update_rail_voltage_reading(){
   rail_voltage = 2 * get_voltage(rail_voltage_measurement_pin);
 }
 
+float get_motor_rpm(){
+  unsigned long time_now = micros();
+  float dt = (float) (time_now - time_since_last_rpm_reading) / (1000.0 * 1000.0);
+  if (dt > 1){ // limit to only work every one second
+    rpm = 60.0 * (((float) hall_effect_event_counts / (float) number_of_motor_pole_pairs) / dt);
+    // update the time and reset the hall effect event counts
+    time_since_last_rpm_reading=micros();
+    hall_effect_event_counts = 0;
+  }
+  return rpm;
+}
+
+void read_reference(){
+
+}
+
 void IRAM_ATTR hole_detected_interrupt()
 {
   holes += 1;
+}
+
+void IRAM_ATTR hall_effect_change_interrupt()
+{
+  hall_effect_event_counts += 1;
 }
 
 void SaveData(String DataString, bool initial=false){
@@ -129,6 +159,9 @@ void setup(){
   Serial.print("Connected to ");
   // Serial.println(ssid);
   Serial.print("IP address: ");
+
+  //attachInterrupt(hall_effect_sensor_pin, hall_effect_change_interrupt, RISING);
+  attachInterrupt(hall_effect_sensor_pin, hall_effect_change_interrupt, FALLING);
   // Serial.println(WiFi.localIP());
 
   // SD_successful = SD.begin(SD_channel_select_pin);
@@ -137,6 +170,10 @@ void setup(){
   // }
   // Serial.print("SD card connection successfull: ");
   // Serial.println(SD_successful);
+  pinMode(cut_off_relay_pin, OUTPUT);
+  pinMode(fan_pin, OUTPUT);
+  digitalWrite(cut_off_relay_pin, LOW);
+  digitalWrite(fan_pin, LOW);
 }
 
 bool send_packet(){
@@ -154,19 +191,20 @@ void loop(){
   voltage = get_voltage_reading();
   current = get_current_reading();
   temperature = get_temperature_reading();
+  rpm = get_motor_rpm();
   Serial.print("I: ");
   Serial.print(current);
   Serial.print(" A; T: ");
   Serial.print(temperature);
   Serial.print(" C; V: ");
   Serial.print(rail_voltage);
-  Serial.println(" V");
-  // Serial.println(rail_voltage);
-  time_now = millis();
+  Serial.print(" V; rpm: ");
+  Serial.print(rpm);
+  Serial.println(".");
   // send_packet();  
   if (SD_successful){
     data_to_save = "Voltage " + (String)(voltage) + ", Current " + (String)(voltage) + ",rpm " + (String)(rpm) + ",time " + (String)(time_now);
     SaveData(data_to_save);
   }
-  delay(100);
+  delay(3000);
 }
