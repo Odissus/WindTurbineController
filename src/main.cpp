@@ -2,13 +2,16 @@
 #include <WiFiUdp.h>
 #include <Arduino.h>
 #include <SD.h>
+#include <esp32-hal-dac.h>
 
 #define current_measurement_pin 34
 #define temperature_measurement_pin 35
 #define rail_voltage_measurement_pin 33
-#define hall_effect_sensor_pin 25
+#define hall_effect_sensor_pin 13
 #define cut_off_relay_pin 14
 #define fan_pin 27
+#define dac_small_value_pin 25
+#define dac_large_value_pin 26
 #define current_correction_factor 1.0
 #define ADC_steps 4095
 #define Digital_Voltage_Reference 3.3
@@ -24,8 +27,9 @@
 #define amplifier_gain 3.84
 #define resistance_ohm 100
 #define number_of_motor_pole_pairs 7
-#define max_adc_read 3.1
-#define min_adc_read 0.
+#define max_dac_read 3.28
+#define min_dac_read 0.004
+#define DAC_bits 12
 
 /* WiFi network name and password */
 const char * ssid = "TurbineMonitor";
@@ -49,7 +53,9 @@ bool SD_successful = false;
 float temp_voltage = 0;
 unsigned long time_since_last_rpm_reading = 0;
 bool fan_relay_on = false;
+int i = 0;
 String data_to_save;
+String command;
 
 float get_voltage(uint8_t pin){
   uint16_t value = analogRead(pin);
@@ -170,10 +176,13 @@ void setup(){
   // }
   // Serial.print("SD card connection successfull: ");
   // Serial.println(SD_successful);
+  // dacAttachPin(25);
+  // dacAttachPin(25);
   pinMode(cut_off_relay_pin, OUTPUT);
   pinMode(fan_pin, OUTPUT);
   digitalWrite(cut_off_relay_pin, LOW);
   digitalWrite(fan_pin, LOW);
+  randomSeed(0);
 }
 
 bool send_packet(){
@@ -186,25 +195,61 @@ bool send_packet(){
   return true; // In the future this can return true or false depending on if it succeeds or fails
 }
 
+void send_dac_value(uint16_t value){
+  if (value > 4607){
+    value = 4607;
+  }
+  int smaller_value = value % 18;
+  int larger_value = value / 18;
+  Serial.print(smaller_value);
+  Serial.print(" -> ");
+  Serial.print((float ) smaller_value / (18.0 * 255.0) * max_dac_read);
+  Serial.print(" , ");
+  Serial.print(larger_value); 
+  Serial.print(" -> ");
+  Serial.print((float ) larger_value / 255.0 * max_dac_read);
+  Serial.print(" ; ");
+  Serial.print(((((float) smaller_value) + (float) larger_value * 18))); 
+  Serial.print(" -> ");
+  Serial.print(((((float) smaller_value / 18.0) + (float) larger_value) / 255.0) * max_dac_read);
+
+  //Serial.print(smaller_value);
+  //Serial.print(" : ");
+  //Serial.println(larger_value);
+  dacWrite(dac_small_value_pin, smaller_value);
+  dacWrite(dac_large_value_pin, larger_value);
+}
+
+void send_dac_voltage(float voltage){
+  uint16_t bits = min(1.0, (double)(voltage / (float) (max_dac_read - min_dac_read))) * 4607;
+  Serial.print(voltage);
+  Serial.print(" -> ");
+  Serial.print(bits);
+  Serial.print(" ; ");
+  send_dac_value(bits);
+}
+
+void read_command(){
+    if (Serial.available()) {
+      command = Serial.readStringUntil('\n');
+      command.trim();
+      Serial.print(rail_voltage);
+      Serial.print(" RV; ");
+      float value = command.toFloat();
+      send_dac_voltage(value);
+      Serial.println();
+    }
+}
+
 void loop(){
   update_rail_voltage_reading();
-  voltage = get_voltage_reading();
-  current = get_current_reading();
-  temperature = get_temperature_reading();
-  rpm = get_motor_rpm();
-  Serial.print("I: ");
-  Serial.print(current);
-  Serial.print(" A; T: ");
-  Serial.print(temperature);
-  Serial.print(" C; V: ");
-  Serial.print(rail_voltage);
-  Serial.print(" V; rpm: ");
-  Serial.print(rpm);
-  Serial.println(".");
-  // send_packet();  
-  if (SD_successful){
-    data_to_save = "Voltage " + (String)(voltage) + ", Current " + (String)(voltage) + ",rpm " + (String)(rpm) + ",time " + (String)(time_now);
-    SaveData(data_to_save);
-  }
-  delay(3000);
+  // https://docs.espressif.com/projects/esp-idf/en/release-v4.4/esp32/api-reference/peripherals/adc.html
+  // 8 channels: GPIO32 - GPIO39
+  // 10 channels: GPIO0, GPIO2, GPIO4, GPIO12 - GPIO15, GOIO25 - GPIO27
+  // https://docs.espressif.com/projects/arduino-esp32/en/latest/api/dac.html
+  //delay(5000);
+  //float new_voltage = 3.5 * (float) random(0, 100000) / 100000.0;
+  //send_dac_voltage(new_voltage);
+  read_command();
+  //send_dac_value(i);
 }
