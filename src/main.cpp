@@ -100,8 +100,9 @@ float get_temperature_reading(){
   return Temperature;
 }
 
-void update_rail_voltage_reading(){
+float get_rail_voltage_reading(){
   rail_voltage = 2 * get_voltage(rail_voltage_measurement_pin);
+  return rail_voltage;
 }
 
 float get_motor_rpm(){
@@ -229,20 +230,51 @@ void send_dac_voltage(float voltage){
   send_dac_value(bits);
 }
 
+void update_cut_off_relay_state(bool on){
+  digitalWrite(cut_off_relay_pin, on);
+}
+
+void update_cooling_fan_state(bool on){
+  digitalWrite(fan_pin, on);
+}
+
 void read_command(){
-    if (Serial.available()) {
-      command = Serial.readStringUntil('\n');
-      command.trim();
-      Serial.print(rail_voltage);
-      Serial.print(" RV; ");
-      float value = command.toFloat();
+  if (Serial.available()) {
+    command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command.equals("HELP")){
+      Serial.println("AVAILABLE COMMANDS INCLUDE: \n\tPOWER ON/OFF\n\tFAN ON/OFF\n\tBRAKE ON/OFF\n\tGET RPM/CURRENT/TEMPERATURE/RAIL VOLTAGE");
+    } else if (command.substring(0,5) == "POWER"){
+      update_cut_off_relay_state(command.equals("POWER ON"));
+    } else if (command.substring(0,3) == "FAN"){
+      update_cooling_fan_state(command.equals("FAN ON"));
+    } else if (command.substring(0,5) == "BRAKE"){
+      float value = command.substring(6, command.length()-1).toFloat();
       send_dac_voltage(value);
-      Serial.println();
+    } else if (command.substring(0,3) == "GET"){
+      if (command.equals("GET RPM")){
+        float value = get_motor_rpm();
+        Serial.print(value);
+        Serial.println(" RPM");
+      } else if (command.equals("GET CURRENT")){
+        float value = get_current_reading();
+        Serial.print(value);
+        Serial.println(" A");
+      } else if (command.equals("GET TEMPERATURE")){
+        float value = get_temperature_reading();
+        Serial.print(value);
+        Serial.println(" C");
+      } else if (command.equals("GET RAIL VOLTAGE")){
+        float value = get_rail_voltage_reading();
+        Serial.print(value);
+        Serial.println(" V");
+      }
     }
+  }
 }
 
 void loop(){
-  update_rail_voltage_reading();
+  get_rail_voltage_reading();
   // https://docs.espressif.com/projects/esp-idf/en/release-v4.4/esp32/api-reference/peripherals/adc.html
   // 8 channels: GPIO32 - GPIO39
   // 10 channels: GPIO0, GPIO2, GPIO4, GPIO12 - GPIO15, GOIO25 - GPIO27
