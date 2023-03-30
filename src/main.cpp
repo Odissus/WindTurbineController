@@ -1,5 +1,5 @@
 #include <WiFi.h>
-#include <WiFiUdp.h>
+//#include <WiFiUdp.h>
 #include <Arduino.h>
 #include <SD.h>
 #include <esp32-hal-dac.h>
@@ -153,15 +153,14 @@ void SaveData(String DataString, bool initial=false){
 void setup(){
   Serial.begin(9600);
   
-  //Connect to the WiFi network
-  // WiFi.begin(ssid, pwd);
+  WiFi.begin("TurbineMonitor", "00000000");
   Serial.println("");
 
   // Wait for connection
-  // while (WiFi.status() != WL_CONNECTED) {
-    // delay(500);
-    // Serial.print(".");
-  // }
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
   Serial.println("");
   Serial.print("Connected to ");
   // Serial.println(ssid);
