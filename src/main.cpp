@@ -4,6 +4,12 @@
 #include <SD.h>
 #include <esp32-hal-dac.h>
 
+#include <WebServer.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+
+#include <WiFi_credentials.h>
+
 #define current_measurement_pin 34
 #define temperature_measurement_pin 35
 #define rail_voltage_measurement_pin 33
@@ -31,9 +37,20 @@
 #define min_dac_read 0.004
 #define DAC_bits 12
 
+#define min_rpm_to_start 20
+#define max_rpm_to_stop 20
+
+#define RPMPIDControllerProportionalConstant 0.2
+#define RPMPIDControllerDifferentialConstant 0.0
+#define RPMPIDControllerIntegralConstant 0.0008
+#define RPMPIDControllerMinValue 0.0
+#define RPMPIDControllerMaxValue 100000.0
+#define RPMPIDControllerDefaultValue 0.0
+
 /* WiFi network name and password */
 const char * ssid = "TurbineMonitor";
 const char * pwd = "0000000000";
+const char* serverName = "http://oracle.odissus.com:5555/turbine_statuses";
 const int udpPort = 44444;
 WiFiUDP udp;
 
@@ -54,8 +71,86 @@ float temp_voltage = 0;
 unsigned long time_since_last_rpm_reading = 0;
 bool fan_relay_on = false;
 int i = 0;
+bool relay_on = false;
+
+
 String data_to_save;
 String command;
+
+class PIDController{
+  public:
+    float target_value;
+    float Kp;
+    float Ki;
+    float Kd;
+
+    float output_min;
+    float output_max;
+
+    unsigned long minimum_time_difference = 0;
+
+    float default_output;
+
+  private:
+    unsigned long time_since_last_ran = 0;
+    unsigned long time_now = 0;
+    float total_error = 0;
+    float last_error = 0;
+    float control_signal;
+
+  public:
+    void Init(float proportional_constant, float integral_constant, float differential_constant, float min_output, float max_output, float default_output, unsigned long minimum_time_difference=0, float target_value=0) {  // Method/function defined inside the class
+      this->Kp = proportional_constant;
+      this->Ki = integral_constant;
+      this->Kd = differential_constant;
+      this->output_min = min_output;
+      this->output_max = max_output;
+      this->minimum_time_difference = minimum_time_difference;
+      this->target_value = target_value;
+      this->default_output = default_output;
+      this->control_signal = default_output;
+    }
+  
+  public:
+    void Update_target(float target_value) {
+      this->target_value = target_value;
+    }
+
+  public:
+    double Update_and_Return(float sensed_output) {
+      this->time_now = millis();
+      unsigned long delta_time = this->time_now - this->time_since_last_ran; //delta time interval 
+      if (delta_time >= minimum_time_difference){
+        float error = this->target_value - sensed_output;
+
+        this->total_error += error; //accumalates the error - integral term
+        if (total_error >= this->output_max) {
+          this->total_error = this->output_max;
+        } else if (total_error <= this->output_min) {
+          this->total_error = this->output_min;
+        }
+
+        float delta_error = error - this->last_error; //difference of error for derivative term
+
+        float control_signal = this->Kp * error + (this->Ki * delta_time) * total_error + (this->Kd / delta_time) * delta_error; //PID control compute
+        if (control_signal >= this->output_max){
+          control_signal = this->output_max;
+        } else if (control_signal <= this->output_min){
+          control_signal = this->output_min;
+        }
+
+        this->last_error = error;
+        this->time_since_last_ran = this->time_now;
+        this->control_signal = control_signal;
+        return control_signal;
+      }
+    // If the controller hasn't ran for long enough, return last value 
+    return this->control_signal;
+    }
+};
+
+// PID
+PIDController RPMPIDController;
 
 float get_voltage(uint8_t pin){
   uint16_t value = analogRead(pin);
@@ -152,9 +247,10 @@ void SaveData(String DataString, bool initial=false){
 
 void setup(){
   Serial.begin(9600);
-  
-  WiFi.begin("TurbineMonitor", "00000000");
-  Serial.println("");
+  const char * SSID = WiFiSSID;
+  const char * password = WiFiPasswd;
+  WiFi.begin(SSID, password);
+  Serial.println("Connecting to a known network ");
 
   // Wait for connection
   while (WiFi.status() != WL_CONNECTED) {
@@ -163,26 +259,22 @@ void setup(){
   }
   Serial.println("");
   Serial.print("Connected to ");
-  // Serial.println(ssid);
-  Serial.print("IP address: ");
+  Serial.println(SSID);
+  Serial.println(WiFi.gatewayIP());
 
-  //attachInterrupt(hall_effect_sensor_pin, hall_effect_change_interrupt, RISING);
   attachInterrupt(hall_effect_sensor_pin, hall_effect_change_interrupt, FALLING);
-  // Serial.println(WiFi.localIP());
-
-  // SD_successful = SD.begin(SD_channel_select_pin);
-  // if (SD_successful){
-  //   SaveData(String(), true);
-  // }
-  // Serial.print("SD card connection successfull: ");
-  // Serial.println(SD_successful);
-  // dacAttachPin(25);
-  // dacAttachPin(25);
   pinMode(cut_off_relay_pin, OUTPUT);
   pinMode(fan_pin, OUTPUT);
   digitalWrite(cut_off_relay_pin, LOW);
   digitalWrite(fan_pin, LOW);
-  randomSeed(0);
+  // PID Controller setting
+  RPMPIDController.Init(RPMPIDControllerProportionalConstant, RPMPIDControllerIntegralConstant, RPMPIDControllerDifferentialConstant, RPMPIDControllerMinValue, RPMPIDControllerMaxValue, RPMPIDControllerDefaultValue);
+  RPMPIDController.Update_target(1);
+  Serial.println("___");
+  Serial.println(RPMPIDController.Kp);
+  Serial.println(RPMPIDController.target_value);
+  Serial.println("___");
+  delay(1000);
 }
 
 bool send_packet(){
@@ -272,8 +364,46 @@ void read_command(){
   }
 }
 
+String httpGETRequest(const char* serverName) {
+  WiFiClient client;
+  HTTPClient http;
+    
+  // Your Domain name with URL path or IP address with path
+  http.begin(client, serverName);
+  http.addHeader("Content-Type", "application/json");
+  // If you need Node-RED/server authentication, insert user and password below
+  //http.setAuthorization("REPLACE_WITH_SERVER_USERNAME", "REPLACE_WITH_SERVER_PASSWORD");
+  
+  // Send HTTP POST request
+
+  String payload = "{'id': 0, 'Name': 'Turbine 1', 'Voltage': 0, 'Current': 0, 'Rpm': 0, 'Temperature': 20, 'Longitude': 0, 'Latitude': 20}"; 
+  int httpResponseCode = http.POST(payload);
+  if (httpResponseCode>0) {
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpResponseCode);
+    payload = http.getString();
+  }
+  else {
+    Serial.print("Error code: ");
+    Serial.println(httpResponseCode);
+  }
+  // Free resources
+  http.end();
+
+  return payload;
+}
+
+void control_relay_state(){
+  if (rpm > min_rpm_to_start){
+    update_cut_off_relay_state(true);
+  } else if (rpm < max_rpm_to_stop){
+    update_cut_off_relay_state(false);
+  }
+}
+
 void loop(){
   get_rail_voltage_reading();
+  rpm = get_motor_rpm();
   // https://docs.espressif.com/projects/esp-idf/en/release-v4.4/esp32/api-reference/peripherals/adc.html
   // 8 channels: GPIO32 - GPIO39
   // 10 channels: GPIO0, GPIO2, GPIO4, GPIO12 - GPIO15, GOIO25 - GPIO27
@@ -281,6 +411,12 @@ void loop(){
   //delay(5000);
   //float new_voltage = 3.5 * (float) random(0, 100000) / 100000.0;
   //send_dac_voltage(new_voltage);
-  read_command();
+  //read_command();
   //send_dac_value(i);
+  
+  float brake_value = - RPMPIDController.Update_and_Return(rpm);
+  Serial.println(brake_value);
+  // WiFi stuff
+  // httpGETRequest(serverName);
+  delay(100);
 }
