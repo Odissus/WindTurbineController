@@ -1,1 +1,1 @@
-#define FirmwareVersion "alpha 0.2"
+#define FirmwareVersion "alpha 0.3"

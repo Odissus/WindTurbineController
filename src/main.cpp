@@ -10,8 +10,9 @@
 
 #include <WiFi_credentials.h>
 
-#define current_measurement_pin 34
-#define temperature_measurement_pin 35
+#define high_voltage_measurement_pin 34
+#define current_measurement_pin 35
+#define temperature_measurement_pin 32
 #define rail_voltage_measurement_pin 33
 #define hall_effect_sensor_pin 13
 #define cut_off_relay_pin 14
@@ -50,7 +51,7 @@
 /* WiFi network name and password */
 const char * ssid = "TurbineMonitor";
 const char * pwd = "0000000000";
-const char* serverName = "http://oracle.odissus.com:5555/turbine_statuses";
+const char* serverName = "http://oracle.odissus.com:8080/turbine_statuses";
 const int udpPort = 44444;
 WiFiUDP udp;
 
@@ -72,7 +73,8 @@ unsigned long time_since_last_rpm_reading = 0;
 bool fan_relay_on = false;
 int i = 0;
 bool relay_on = false;
-
+bool WiFi_connected = false;
+bool stop_sending_requests = false;
 
 String data_to_save;
 String command;
@@ -153,8 +155,18 @@ class PIDController{
 PIDController RPMPIDController;
 
 float get_voltage(uint8_t pin){
+  // Gets voltage on a pin
   uint16_t value = analogRead(pin);
   return 0.0007963 * (float) value + 0.13;
+}
+
+float get_high_voltage(){
+  float this_voltage = 0;
+  for (int i = 0; i < 10; i++){ 
+    this_voltage += get_voltage(high_voltage_measurement_pin) / 10.0;
+  }
+  voltage = this_voltage * 100.0 / 3.3;
+  return voltage;
 }
 
 float get_voltage_reading(){
@@ -212,6 +224,15 @@ float get_motor_rpm(){
   return rpm;
 }
 
+float get_motor_rpm2(){
+  
+  hall_effect_event_counts = 0;
+  delay(6000);
+  rpm = ((((float) hall_effect_event_counts / (float) number_of_motor_pole_pairs)) / 6.0) * 60;
+  hall_effect_event_counts = 0;
+  return rpm;
+}
+
 void read_reference(){
 
 }
@@ -245,22 +266,56 @@ void SaveData(String DataString, bool initial=false){
   file.close();
 }
 
-void setup(){
-  Serial.begin(9600);
+bool connect_to_wifi(int max_wait_time_seconds, bool turn_radio_off_if_failed){
+  // Connections to Wifi and returns a bool specifying if a connection was succesfull
   const char * SSID = WiFiSSID;
   const char * password = WiFiPasswd;
-  WiFi.begin(SSID, password);
-  Serial.println("Connecting to a known network ");
+  const char * backup_SSID = WiFiSSID2;
+  const char * backup_password = WiFiPasswd2;
 
-  // Wait for connection
-  while (WiFi.status() != WL_CONNECTED) {
+  // Try default credentials
+  unsigned long start_time = millis();
+  WiFi.begin(SSID, password);
+  Serial.println("Using default network credentials");
+
+  // Try default connection first
+  while ((WiFi.status() != WL_CONNECTED) && ((millis() - start_time) < (max_wait_time_seconds * 1000 / 2))) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("");
-  Serial.print("Connected to ");
-  Serial.println(SSID);
-  Serial.println(WiFi.gatewayIP());
+
+  if (WiFi.status() == WL_CONNECTED){
+    Serial.print("Connected to ");
+    Serial.println(SSID);
+    Serial.println(WiFi.gatewayIP());
+    return true;
+  }
+
+  Serial.println("Changing over to backup network");
+  WiFi.disconnect(false, true);
+  WiFi.begin(backup_SSID, backup_password);
+
+  // Change over to backup connection
+  while ((WiFi.status() != WL_CONNECTED) && ((millis() - start_time) < (max_wait_time_seconds * 1000))) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED){
+    Serial.print("Connected to ");
+    Serial.println(backup_SSID);
+    Serial.println(WiFi.gatewayIP());
+    return true;
+  }
+
+  WiFi.disconnect(turn_radio_off_if_failed, true);
+  return false;
+}
+
+void setup(){
+  Serial.begin(9600);
+
+  WiFi_connected = connect_to_wifi(5, true);
 
   attachInterrupt(hall_effect_sensor_pin, hall_effect_change_interrupt, FALLING);
   pinMode(cut_off_relay_pin, OUTPUT);
@@ -334,7 +389,7 @@ void read_command(){
     command = Serial.readStringUntil('\n');
     command.trim();
     if (command.equals("HELP")){
-      Serial.println("AVAILABLE COMMANDS INCLUDE: \n\tPOWER ON/OFF\n\tFAN ON/OFF\n\tBRAKE ON/OFF\n\tGET RPM/CURRENT/TEMPERATURE/RAIL VOLTAGE");
+      Serial.println("AVAILABLE COMMANDS INCLUDE: \n\tPOWER ON/OFF\n\tFAN ON/OFF\n\tBRAKE [digits...]VGE\n\tGET RPM/CURRENT/TEMPERATURE/VOLTAGE/RAIL VOLTAGE");
     } else if (command.substring(0,5) == "POWER"){
       update_cut_off_relay_state(command.equals("POWER ON"));
     } else if (command.substring(0,3) == "FAN"){
@@ -359,6 +414,10 @@ void read_command(){
         float value = get_rail_voltage_reading();
         Serial.print(value);
         Serial.println(" V");
+      } else if (command.equals("GET VOLTAGE")){
+        float value = get_high_voltage();
+        Serial.print(value);
+        Serial.println(" V");
       }
     }
   }
@@ -376,7 +435,7 @@ String httpGETRequest(const char* serverName) {
   
   // Send HTTP POST request
 
-  String payload = "{'id': 0, 'Name': 'Turbine 1', 'Voltage': 0, 'Current': 0, 'Rpm': 0, 'Temperature': 20, 'Longitude': 0, 'Latitude': 20}"; 
+  String payload = "{\"id\": 5, \"Name\": \"Turbine 2\", \"Voltage\": 0, \"Current\": 0, \"Rpm\": 0, \"Temperature\": 20, \"Longitude\": 0, \"Latitude\": 20}"; 
   int httpResponseCode = http.POST(payload);
   if (httpResponseCode>0) {
     Serial.print("HTTP Response code: ");
@@ -411,12 +470,17 @@ void loop(){
   //delay(5000);
   //float new_voltage = 3.5 * (float) random(0, 100000) / 100000.0;
   //send_dac_voltage(new_voltage);
-  //read_command();
+  read_command();
   //send_dac_value(i);
   
-  float brake_value = - RPMPIDController.Update_and_Return(rpm);
-  Serial.println(brake_value);
+  // float brake_value = - RPMPIDController.Update_and_Return(rpm);
+  // Serial.println(brake_value);
   // WiFi stuff
-  // httpGETRequest(serverName);
-  delay(100);
+  if (stop_sending_requests == false){
+    String result = httpGETRequest(serverName);
+    Serial.println(result);
+    stop_sending_requests = true;
+  }
+  
+  // delay(100);
 }
