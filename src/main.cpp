@@ -9,6 +9,8 @@
 #include <HTTPClient.h>
 
 #include <WiFi_credentials.h>
+#include <ServerHandler.h>
+#include <server_authorisation_token.h>
 
 #define high_voltage_measurement_pin 34
 #define current_measurement_pin 35
@@ -75,6 +77,10 @@ int i = 0;
 bool relay_on = false;
 bool WiFi_connected = false;
 bool stop_sending_requests = false;
+time_t datetime_on_boot;
+
+float longitude = -1.395043;
+float latitude = 50.9352279;
 
 String data_to_save;
 String command;
@@ -312,26 +318,6 @@ bool connect_to_wifi(int max_wait_time_seconds, bool turn_radio_off_if_failed){
   return false;
 }
 
-void setup(){
-  Serial.begin(9600);
-
-  WiFi_connected = connect_to_wifi(5, true);
-
-  attachInterrupt(hall_effect_sensor_pin, hall_effect_change_interrupt, FALLING);
-  pinMode(cut_off_relay_pin, OUTPUT);
-  pinMode(fan_pin, OUTPUT);
-  digitalWrite(cut_off_relay_pin, LOW);
-  digitalWrite(fan_pin, LOW);
-  // PID Controller setting
-  RPMPIDController.Init(RPMPIDControllerProportionalConstant, RPMPIDControllerIntegralConstant, RPMPIDControllerDifferentialConstant, RPMPIDControllerMinValue, RPMPIDControllerMaxValue, RPMPIDControllerDefaultValue);
-  RPMPIDController.Update_target(1);
-  Serial.println("___");
-  Serial.println(RPMPIDController.Kp);
-  Serial.println(RPMPIDController.target_value);
-  Serial.println("___");
-  delay(1000);
-}
-
 bool send_packet(){
   udp.beginPacket(WiFi.gatewayIP(), udpPort);
   // udp.printf("Voltage %2.10f,", voltage);
@@ -423,40 +409,34 @@ void read_command(){
   }
 }
 
-String httpGETRequest(const char* serverName) {
-  WiFiClient client;
-  HTTPClient http;
-    
-  // Your Domain name with URL path or IP address with path
-  http.begin(client, serverName);
-  http.addHeader("Content-Type", "application/json");
-  // If you need Node-RED/server authentication, insert user and password below
-  //http.setAuthorization("REPLACE_WITH_SERVER_USERNAME", "REPLACE_WITH_SERVER_PASSWORD");
-  
-  // Send HTTP POST request
-
-  String payload = "{\"id\": 5, \"Name\": \"Turbine 2\", \"Voltage\": 0, \"Current\": 0, \"Rpm\": 0, \"Temperature\": 20, \"Longitude\": 0, \"Latitude\": 20}"; 
-  int httpResponseCode = http.POST(payload);
-  if (httpResponseCode>0) {
-    Serial.print("HTTP Response code: ");
-    Serial.println(httpResponseCode);
-    payload = http.getString();
-  }
-  else {
-    Serial.print("Error code: ");
-    Serial.println(httpResponseCode);
-  }
-  // Free resources
-  http.end();
-
-  return payload;
-}
-
 void control_relay_state(){
   if (rpm > min_rpm_to_start){
     update_cut_off_relay_state(true);
   } else if (rpm < max_rpm_to_stop){
     update_cut_off_relay_state(false);
+  }
+}
+
+void setup(){
+  Serial.begin(9600);
+
+  WiFi_connected = connect_to_wifi(5, true);
+
+  attachInterrupt(hall_effect_sensor_pin, hall_effect_change_interrupt, FALLING);
+  pinMode(cut_off_relay_pin, OUTPUT);
+  pinMode(fan_pin, OUTPUT);
+  digitalWrite(cut_off_relay_pin, LOW);
+  digitalWrite(fan_pin, LOW);
+  // PID Controller setting
+  RPMPIDController.Init(RPMPIDControllerProportionalConstant, RPMPIDControllerIntegralConstant, RPMPIDControllerDifferentialConstant, RPMPIDControllerMinValue, RPMPIDControllerMaxValue, RPMPIDControllerDefaultValue);
+  RPMPIDController.Update_target(1);
+
+  if (WiFi_connected){
+    datetime_on_boot = request_current_time();
+    Serial.println(datetime_on_boot);
+    if (datetime_on_boot == 0){
+      ESP.restart();
+    }
   }
 }
 
@@ -471,16 +451,14 @@ void loop(){
   //float new_voltage = 3.5 * (float) random(0, 100000) / 100000.0;
   //send_dac_voltage(new_voltage);
   read_command();
+  send_update_to_server(serverName, voltage, current, rpm, temperature, longitude, latitude);
+  delay(1000);
   //send_dac_value(i);
   
   // float brake_value = - RPMPIDController.Update_and_Return(rpm);
   // Serial.println(brake_value);
   // WiFi stuff
-  if (stop_sending_requests == false){
-    String result = httpGETRequest(serverName);
-    Serial.println(result);
-    stop_sending_requests = true;
-  }
   
   // delay(100);
+
 }
