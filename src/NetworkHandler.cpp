@@ -3,7 +3,9 @@
 #include <HTTPClient.h>
 
 #include <server_authorisation_token.h>
-#include <ServerHandler.h>
+#include <NetworkHandler.h>
+#include <WiFi_credentials.h>
+#include <firmware_version.h>
 
 
 time_t request_current_time(){
@@ -45,7 +47,7 @@ time_t request_current_time(){
   return default_time;
 }
 
-String send_update_to_server(const char* serverName, float voltage, float current, int rpm, float temperature, float longitude, float latitude) {
+String send_update_to_server(const char* serverName, float voltage, float rail_voltage, float current, int rpm, float temperature, bool relay_on, bool fan_on, float brake_value, float longitude, float latitude) {
   WiFiClient client;
   HTTPClient http;
     
@@ -65,11 +67,16 @@ String send_update_to_server(const char* serverName, float voltage, float curren
   doc["id"] = 0;
   doc["Name"] = "Demo Turbine Monitor";
   doc["Voltage"] = voltage;
+  doc["Rail_Voltage"] = rail_voltage;
   doc["Current"] = current;
   doc["Rpm"] = rpm;
   doc["Temperature"] = temperature;
+  doc["Relay_On"] = relay_on;
+  doc["Fan_On"] = fan_on;
+  doc["Brake_Value"] = brake_value;
   doc["Longitude"] = longitude;
   doc["Latitude"] = latitude;
+  doc["Version"] = FirmwareVersion;
 
   // Serialize the JSON document to a string
   String payload;
@@ -89,4 +96,50 @@ String send_update_to_server(const char* serverName, float voltage, float curren
   http.end();
 
   return payload;
+}
+
+bool connect_to_wifi(int max_wait_time_seconds, bool turn_radio_off_if_failed){
+  // Connections to Wifi and returns a bool specifying if a connection was succesfull
+  const char * SSID = WiFiSSID;
+  const char * password = WiFiPasswd;
+  const char * backup_SSID = WiFiSSID2;
+  const char * backup_password = WiFiPasswd2;
+
+  // Try default credentials
+  unsigned long start_time = millis();
+  WiFi.begin(SSID, password);
+  Serial.println("Using default network credentials");
+
+  // Try default connection first
+  while ((WiFi.status() != WL_CONNECTED) && ((millis() - start_time) < (max_wait_time_seconds * 1000 / 2))) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED){
+    Serial.print("Connected to ");
+    Serial.println(SSID);
+    Serial.println(WiFi.gatewayIP());
+    return true;
+  }
+
+  Serial.println("Changing over to backup network");
+  WiFi.disconnect(false, true);
+  WiFi.begin(backup_SSID, backup_password);
+
+  // Change over to backup connection
+  while ((WiFi.status() != WL_CONNECTED) && ((millis() - start_time) < (max_wait_time_seconds * 1000))) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED){
+    Serial.print("Connected to ");
+    Serial.println(backup_SSID);
+    Serial.println(WiFi.gatewayIP());
+    return true;
+  }
+
+  WiFi.disconnect(turn_radio_off_if_failed, true);
+  return false;
 }
